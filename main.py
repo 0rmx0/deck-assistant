@@ -9,10 +9,13 @@ Version avec séparation des responsabilités et élimination de duplication.
 
 import sys
 import csv
+import sqlite3
 import requests
 from typing import List, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
+import json
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,6 +33,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QSizePolicy,
     QProgressBar,
+    QMenuBar,
+    QMenu,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 
@@ -86,6 +91,126 @@ MAX_SYNERGY_SCORE = 6
 
 
 # ========== CLASSES MÉTIER ==========
+
+class GestionnaireBD:
+    """Gère la persistance des données via SQLite."""
+    
+    def __init__(self, chemin_bd: str = "deck_collection.db"):
+        self.chemin_bd = chemin_bd
+        self._initialiser_bd()
+    
+    def _initialiser_bd(self) -> None:
+        """Crée la table si elle n'existe pas."""
+        with sqlite3.connect(self.chemin_bd) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS cartes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nom TEXT NOT NULL,
+                    couleur TEXT,
+                    type TEXT,
+                    cout_mana TEXT,
+                    oracle_text_en TEXT,
+                    oracle_text_fr TEXT,
+                    scryfall_id TEXT UNIQUE,
+                    quantity REAL,
+                    set_code TEXT,
+                    set_name TEXT,
+                    collector_number TEXT,
+                    rarity TEXT,
+                    language TEXT,
+                    condition TEXT,
+                    finish TEXT,
+                    altered BOOLEAN,
+                    signed BOOLEAN,
+                    misprint BOOLEAN,
+                    price_usd REAL,
+                    price_eur REAL,
+                    price_usd_foil REAL,
+                    price_eur_foil REAL,
+                    price_usd_etched REAL,
+                    price_eur_etched REAL,
+                    container_type TEXT,
+                    container_name TEXT
+                )
+            ''')
+            conn.commit()
+    
+    def sauvegarder_cartes(self, cartes: List[Dict[str, Any]]) -> None:
+        """Sauvegarde les cartes dans la BD."""
+        with sqlite3.connect(self.chemin_bd) as conn:
+            cursor = conn.cursor()
+            for carte in cartes:
+                try:
+                    # Convertir les listes en JSON
+                    couleur = json.dumps(carte.get("couleur", []))
+                    
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO cartes (
+                            nom, couleur, type, cout_mana, oracle_text_en, oracle_text_fr,
+                            scryfall_id, quantity, set_code, set_name, collector_number,
+                            rarity, language, condition, finish, altered, signed, misprint,
+                            price_usd, price_eur, price_usd_foil, price_eur_foil,
+                            price_usd_etched, price_eur_etched, container_type, container_name
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        carte.get("nom", ""),
+                        couleur,
+                        carte.get("type", ""),
+                        carte.get("cout_mana", ""),
+                        carte.get("oracle_text_en", ""),
+                        carte.get("oracle_text_fr", ""),
+                        carte.get("scryfall_id", ""),
+                        carte.get("quantity", 1.0),
+                        carte.get("set_code", ""),
+                        carte.get("set_name", ""),
+                        carte.get("collector_number", ""),
+                        carte.get("rarity", ""),
+                        carte.get("language", ""),
+                        carte.get("condition", ""),
+                        carte.get("finish", ""),
+                        carte.get("altered", False),
+                        carte.get("signed", False),
+                        carte.get("misprint", False),
+                        carte.get("price_usd", 0.0),
+                        carte.get("price_eur", 0.0),
+                        carte.get("price_usd_foil", 0.0),
+                        carte.get("price_eur_foil", 0.0),
+                        carte.get("price_usd_etched", 0.0),
+                        carte.get("price_eur_etched", 0.0),
+                        carte.get("container_type", ""),
+                        carte.get("container_name", ""),
+                    ))
+                except sqlite3.IntegrityError:
+                    pass  # Ignorer les doublons
+            conn.commit()
+    
+    def charger_toutes_cartes(self) -> List[Dict[str, Any]]:
+        """Charge toutes les cartes de la BD."""
+        cartes = []
+        with sqlite3.connect(self.chemin_bd) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM cartes")
+            
+            for row in cursor.fetchall():
+                carte = dict(row)
+                # Reconvertir JSON en liste
+                try:
+                    carte["couleur"] = json.loads(carte.get("couleur", "[]"))
+                except (json.JSONDecodeError, TypeError):
+                    carte["couleur"] = []
+                cartes.append(carte)
+        
+        return cartes
+    
+    def vider_bd(self) -> None:
+        """Vide complètement la BD."""
+        with sqlite3.connect(self.chemin_bd) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM cartes")
+            conn.commit()
+
 
 @dataclass
 class Carte:
@@ -220,9 +345,12 @@ class ChargeurCSV:
 class CalculatriceSynergie:
     """Calcule la synergie entre une carte et un commandant."""
     
+    MAX_STARS = 5  # Nombre maximum d'étoiles
+    STAR_SYMBOL = "⭐"  # Symbole d'étoile
+    
     @staticmethod
-    def calculer(carte: Dict[str, Any], commandeur: Dict[str, Any]) -> float:
-        """Retourne un score de synergie en pourcentage (0-100)."""
+    def calculer(carte: Dict[str, Any], commandeur: Dict[str, Any]) -> int:
+        """Retourne un score de synergie en nombre d'étoiles (0-5)."""
         score = 0
         
         # Bonus légendaire
@@ -239,7 +367,15 @@ class CalculatriceSynergie:
         if couleurs_carte.issubset(couleurs_commandeur):
             score += 2
         
-        return round((score / MAX_SYNERGY_SCORE) * 100, 1)
+        # Convertir en nombre d'étoiles (0-5)
+        pourcentage = (score / MAX_SYNERGY_SCORE) * 100
+        nb_etoiles = round((pourcentage / 100) * CalculatriceSynergie.MAX_STARS)
+        return max(0, min(nb_etoiles, CalculatriceSynergie.MAX_STARS))
+    
+    @staticmethod
+    def afficher_synergie(nb_etoiles: int) -> str:
+        """Convertit le nombre d'étoiles en affichage."""
+        return CalculatriceSynergie.STAR_SYMBOL * nb_etoiles
 
 
 class GestionnairesCouleurs:
@@ -312,12 +448,37 @@ class DeckBuilderApp(QMainWindow):
         self.setWindowTitle(f"MTG Deck Builder - Commandeur v{VERSION}")
         self.setGeometry(100, 100, 950, 650)
 
+        # Gestionnaire de BD
+        self.bd = None
+        self.chemin_bd_actuel = None
+
         self.collection: List[Dict[str, Any]] = []
         self._combo_to_nom: Dict[str, str] = {}
         self.sens_tri: Dict[int, int] = {}
 
+        self._creer_menu()
         self._creer_widgets()
         self._creer_layout()
+    
+    def _creer_menu(self) -> None:
+        """Crée la barre de menu."""
+        menubar = self.menuBar()
+        
+        # Menu Fichier
+        menu_fichier = menubar.addMenu("Fichier")
+        
+        action_ouvrir_bd = menu_fichier.addAction("Ouvrir une base de données")
+        action_ouvrir_bd.triggered.connect(self.ouvrir_base_donnees)
+        
+        menu_fichier.addSeparator()
+        
+        action_importer = menu_fichier.addAction("Importer un CSV")
+        action_importer.triggered.connect(self.importer_collection)
+        
+        menu_fichier.addSeparator()
+        
+        action_quitter = menu_fichier.addAction("Quitter")
+        action_quitter.triggered.connect(self.close)
 
     def _creer_widgets(self) -> None:
         """Crée les widgets de l'interface."""
@@ -346,6 +507,30 @@ class DeckBuilderApp(QMainWindow):
         self.barre_progression = QProgressBar()
         self.barre_progression.setVisible(False)
         self.barre_progression.setMaximum(100)
+
+    def ouvrir_base_donnees(self) -> None:
+        """Ouvre une base de données existante."""
+        fichier, _ = QFileDialog.getOpenFileName(
+            self, "Ouvrir une base de données", "", "Fichiers SQLite (*.db)"
+        )
+        if not fichier:
+            return
+        
+        try:
+            self.bd = GestionnaireBD(fichier)
+            self.chemin_bd_actuel = fichier
+            self.collection = self.bd.charger_toutes_cartes()
+            
+            if not self.collection:
+                QMessageBox.warning(self, "Avertissement", "La base de données est vide.")
+                return
+            
+            self.setWindowTitle(f"MTG Deck Builder - Commandeur v{VERSION} - {Path(fichier).name}")
+            self.mettre_a_jour_liste_commandeurs()
+            self.mettre_a_jour_tableau(self.combo_commandeur.currentText())
+            QMessageBox.information(self, "Succès", f"Base de données chargée : {len(self.collection)} cartes")
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Impossible d'ouvrir la base : {e}")
 
     def _creer_layout(self) -> None:
         """Crée le layout principal."""
@@ -387,7 +572,31 @@ class DeckBuilderApp(QMainWindow):
         if not self.collection:
             QMessageBox.warning(self, "Erreur", "Le CSV est vide ou mal formaté.")
             return
-
+        
+        # Proposer de créer/utiliser une BD
+        if not self.bd:
+            reponse = QMessageBox.question(
+                self, 
+                "Créer une base de données ?", 
+                "Voulez-vous créer une base de données pour sauvegarder cette collection ?"
+            )
+            if reponse == QMessageBox.Yes:
+                fichier, _ = QFileDialog.getSaveFileName(
+                    self, "Créer une base de données", "", "Fichiers SQLite (*.db)"
+                )
+                if fichier:
+                    # S'assurer que le fichier se termine par .db
+                    if not fichier.lower().endswith('.db'):
+                        fichier = fichier + '.db'
+                    self.bd = GestionnaireBD(fichier)
+                    self.chemin_bd_actuel = fichier
+                    self.setWindowTitle(f"MTG Deck Builder - Commandeur v{VERSION} - {Path(fichier).name}")
+        
+        # Sauvegarder dans la BD
+        if self.bd:
+            self.bd.sauvegarder_cartes(self.collection)
+            QMessageBox.information(self, "Succès", f"Collection sauvegardée : {len(self.collection)} cartes")
+        
         self.mettre_a_jour_liste_commandeurs()
         self.mettre_a_jour_tableau(self.combo_commandeur.currentText())
 
@@ -456,8 +665,9 @@ class DeckBuilderApp(QMainWindow):
             self.tableau_cartes.setItem(i, 3, QTableWidgetItem(carte.get("cout_mana", "")))
             
             # Colonne : Synergie
-            synergie = CalculatriceSynergie.calculer(carte, commandeur)
-            self.tableau_cartes.setItem(i, 4, QTableWidgetItem(f"{synergie}%"))
+            synergie_etoiles = CalculatriceSynergie.calculer(carte, commandeur)
+            affichage = CalculatriceSynergie.afficher_synergie(synergie_etoiles)
+            self.tableau_cartes.setItem(i, 4, QTableWidgetItem(affichage))
             
             # Colonne : Détails
             texte = carte.get("oracle_text_en") or carte.get("oracle_text", "")
