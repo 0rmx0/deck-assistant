@@ -38,12 +38,6 @@ from PySide6.QtCore import Qt, QThread, Signal
 
 VERSION = "26.02.01"
 
-LIBRETRANSLATE_INSTANCES = [
-    "https://translate.argosopentech.com/translate",
-    "https://libretranslate.de/translate",
-    "https://libretranslate.com/translate",
-]
-
 COLOR_SYMBOLS = {
     "W": "⚪",  # Blanc
     "U": "🔵",  # Bleu
@@ -112,34 +106,6 @@ class Carte:
         return not self.couleur
 
 
-class TranslateurLibreTranslate:
-    """Gère la traduction via LibreTranslate."""
-    
-    @staticmethod
-    def traduire(texte: str, source: str = "en", target: str = "fr") -> str:
-        """Tente de traduire via plusieurs instances."""
-        if not texte:
-            return texte
-
-        payload = {"q": texte, "source": source, "target": target, "format": "text"}
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-
-        for url in LIBRETRANSLATE_INSTANCES:
-            try:
-                resp = requests.post(url, json=payload, headers=headers, timeout=8)
-                if resp.status_code != 200:
-                    continue
-                
-                data = resp.json()
-                translated = data.get("translatedText") or data.get("translation")
-                if translated:
-                    return translated
-            except Exception:
-                continue
-
-        return texte
-
-
 class ClientScryfall:
     """Interface pour l'API Scryfall."""
     
@@ -168,7 +134,7 @@ class ClientScryfall:
     
     @classmethod
     def _extraire_oracle_text_fr(cls, data: Dict[str, Any], oracle_en: str) -> str:
-        """Extrait le texte Oracle en français, ou traduit en fallback."""
+        """Extrait le texte Oracle en français (sans traduction automatique)."""
         prints_uri = data.get("prints_search_uri")
         if prints_uri:
             try:
@@ -180,7 +146,7 @@ class ClientScryfall:
             except Exception:
                 pass
         
-        return TranslateurLibreTranslate.traduire(oracle_en) if oracle_en else ""
+        return ""
     
     @classmethod
     def enrichir_carte(cls, carte: Dict[str, Any]) -> None:
@@ -362,12 +328,6 @@ class DeckBuilderApp(QMainWindow):
         self.bouton_importer = QPushButton("Importer une collection (CSV)")
         self.bouton_importer.clicked.connect(self.importer_collection)
 
-        self.checkbox_traduction = QCheckBox("Traduire les détails en français")
-        self.checkbox_traduction.setChecked(False)
-        self.checkbox_traduction.stateChanged.connect(
-            lambda _: self.mettre_a_jour_tableau(self.combo_commandeur.currentText())
-        )
-
         self.tableau_cartes = QTableWidget()
         self.tableau_cartes.setColumnCount(6)
         self.tableau_cartes.setHorizontalHeaderLabels(
@@ -393,7 +353,6 @@ class DeckBuilderApp(QMainWindow):
         layout.addWidget(self.label_commandeur)
         layout.addWidget(self.combo_commandeur)
         layout.addWidget(self.bouton_importer)
-        layout.addWidget(self.checkbox_traduction)
         layout.addWidget(self.barre_progression)
         layout.addWidget(self.tableau_cartes)
 
@@ -501,11 +460,7 @@ class DeckBuilderApp(QMainWindow):
             self.tableau_cartes.setItem(i, 4, QTableWidgetItem(f"{synergie}%"))
             
             # Colonne : Détails
-            if self.checkbox_traduction.isChecked():
-                texte = carte.get("oracle_text_fr") or carte.get("oracle_text_en", "")
-            else:
-                texte = carte.get("oracle_text_en") or carte.get("oracle_text_fr", "")
-            
+            texte = carte.get("oracle_text_en") or carte.get("oracle_text", "")
             court = texte[:100] + ("…" if len(texte) > 100 else "") if texte else ""
             self.tableau_cartes.setItem(i, 5, QTableWidgetItem(court))
 
