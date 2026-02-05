@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QLabel,
     QPushButton,
+    QCheckBox,
     QFileDialog,
     QMessageBox,
     QHeaderView,
@@ -33,6 +34,52 @@ from PySide6.QtWidgets import (
     QProgressBar,                # <-- barre de progression
 )
 from PySide6.QtCore import Qt, QThread, Signal
+
+# URL de l'instance publique LibreTranslate (texte → fr)
+# Liste d'instances publiques possibles (ordre d'essai)
+LIBRETRANSLATE_INSTANCES = [
+    "https://translate.argosopentech.com/translate",
+    "https://libretranslate.de/translate",
+    "https://libretranslate.com/translate",
+]
+
+
+def traduire_texte_libre(texte: str, source: str = "en", target: str = "fr") -> str:
+    """Tente de traduire `texte` via plusieurs instances publiques LibreTranslate.
+
+    Si aucune instance ne répond correctement, renvoie le texte d'origine.
+    """
+    if not texte:
+        return texte
+
+    payload = {"q": texte, "source": source, "target": target, "format": "text"}
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+
+    for url in LIBRETRANSLATE_INSTANCES:
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=8)
+            # Si la réponse n'est pas JSON, on ignore cette instance
+            content_type = resp.headers.get("content-type", "")
+            if resp.status_code != 200:
+                continue
+            if "application/json" not in content_type.lower():
+                # tenter quand même de parser en JSON au cas où
+                try:
+                    data = resp.json()
+                except Exception:
+                    continue
+            else:
+                data = resp.json()
+
+            # format attendu: {"translatedText": "..."}
+            translated = data.get("translatedText") or data.get("translation")
+            if translated:
+                return translated
+        except Exception:
+            continue
+
+    # Aucune instance disponible → renvoyer le texte d'origine
+    return texte
 
 
 # ----------------------------------------------------------------------
@@ -159,12 +206,34 @@ class ImportWorker(QThread):
             if réponse.status_code != 200:
                 return {}
             data = réponse.json()
+            oracle_text_en = data.get("oracle_text", "")
+
+            # Chercher une version imprimée en français via prints_search_uri
+            oracle_text_fr = ""
+            prints_uri = data.get("prints_search_uri")
+            if prints_uri:
+                try:
+                    r2 = requests.get(prints_uri, timeout=8)
+                    if r2.status_code == 200:
+                        pdata = r2.json()
+                        for p in pdata.get("data", []):
+                            if p.get("lang") == "fr" and p.get("oracle_text"):
+                                oracle_text_fr = p.get("oracle_text")
+                                break
+                except Exception:
+                    oracle_text_fr = ""
+
+            # Si pas de version FR trouvée, tenter LibreTranslate en fallback
+            if not oracle_text_fr and oracle_text_en:
+                oracle_text_fr = traduire_texte_libre(oracle_text_en)
+
             return {
                 "scryfall_id": data.get("id", ""),
                 "couleur": data.get("color_identity", []),   # liste de lettres
                 "type": data.get("type_line", ""),
                 "cout_mana": data.get("mana_cost", ""),
-                "oracle_text": data.get("oracle_text", ""),
+                "oracle_text_en": oracle_text_en,
+                "oracle_text_fr": oracle_text_fr,
             }
         except Exception:
             return {}
@@ -178,11 +247,32 @@ class ImportWorker(QThread):
             if réponse.status_code != 200:
                 return {}
             data = réponse.json()
+            oracle_text_en = data.get("oracle_text", "")
+
+            # Chercher version FR via prints_search_uri
+            oracle_text_fr = ""
+            prints_uri = data.get("prints_search_uri")
+            if prints_uri:
+                try:
+                    r2 = requests.get(prints_uri, timeout=8)
+                    if r2.status_code == 200:
+                        pdata = r2.json()
+                        for p in pdata.get("data", []):
+                            if p.get("lang") == "fr" and p.get("oracle_text"):
+                                oracle_text_fr = p.get("oracle_text")
+                                break
+                except Exception:
+                    oracle_text_fr = ""
+
+            if not oracle_text_fr and oracle_text_en:
+                oracle_text_fr = traduire_texte_libre(oracle_text_en)
+
             return {
                 "couleur": data.get("color_identity", []),
                 "type": data.get("type_line", ""),
                 "cout_mana": data.get("mana_cost", ""),
-                "oracle_text": data.get("oracle_text", ""),
+                "oracle_text_en": oracle_text_en,
+                "oracle_text_fr": oracle_text_fr,
             }
         except Exception:
             return {}
@@ -206,6 +296,11 @@ class DeckBuilderApp(QMainWindow):
 
         self.bouton_importer = QPushButton("Importer une collection (CSV)")
         self.bouton_importer.clicked.connect(self.importer_collection)
+
+        # Checkbox pour activer/désactiver la traduction des détails
+        self.checkbox_traduction = QCheckBox("Traduire les détails en français")
+        self.checkbox_traduction.setChecked(False)
+        self.checkbox_traduction.stateChanged.connect(lambda _: self.mettre_a_jour_tableau(self.combo_commandeur.currentText()))
 
         self.tableau_cartes = QTableWidget()
         self.tableau_cartes.setColumnCount(6)
@@ -237,6 +332,7 @@ class DeckBuilderApp(QMainWindow):
         layout.addWidget(self.label_commandeur)
         layout.addWidget(self.combo_commandeur)
         layout.addWidget(self.bouton_importer)
+        layout.addWidget(self.checkbox_traduction)
         layout.addWidget(self.barre_progression)   # placée juste au dessus du tableau
         layout.addWidget(self.tableau_cartes)
 
@@ -323,8 +419,8 @@ class DeckBuilderApp(QMainWindow):
         for carte in commandeurs:
             nom = carte["nom"]
             couleurs = carte.get("couleur", [])
-            couleur_str = "C" if not couleurs else "".join(couleurs)   # C = incolore
-            texte_combo = f"{nom} [{couleur_str}]"
+            couleur_symboles = self._couleurs_a_symboles(couleurs)
+            texte_combo = f"{nom} [{couleur_symboles}]"
             items_affiches.append(texte_combo)
             self._combo_to_nom[texte_combo] = nom
 
@@ -377,13 +473,28 @@ class DeckBuilderApp(QMainWindow):
         cartes_filtrees = self.filtrer_par_couleurs(self.collection, couleurs)
         self.remplir_tableau(cartes_filtrees)
 
+    def _couleurs_a_symboles(self, couleurs: List[str]) -> str:
+        """Convertit les lettres de couleur en symboles/emojis colorés."""
+        symboles_map = {
+            "W": "⚪",  # Blanc
+            "U": "🔵",  # Bleu
+            "B": "⚫",  # Noir
+            "R": "🔴",  # Rouge
+            "G": "🟢",  # Vert
+            "C": "⭕",  # Incolore
+        }
+        if not couleurs:
+            return symboles_map["C"]
+        return "".join(symboles_map.get(c, c) for c in couleurs)
+
     def remplir_tableau(self, cartes: List[Dict[str, Any]]):
         """Affiche les cartes dans le QTableWidget."""
         self.tableau_cartes.setRowCount(len(cartes))
         for i, carte in enumerate(cartes):
             self.tableau_cartes.setItem(i, 0, QTableWidgetItem(carte["nom"]))
+            couleurs = carte.get("couleur", [])
             self.tableau_cartes.setItem(
-                i, 1, QTableWidgetItem(",".join(carte.get("couleur", [])))
+                i, 1, QTableWidgetItem(self._couleurs_a_symboles(couleurs))
             )
             self.tableau_cartes.setItem(i, 2, QTableWidgetItem(carte.get("type", "")))
             self.tableau_cartes.setItem(i, 3, QTableWidgetItem(carte.get("cout_mana", "")))
@@ -392,10 +503,15 @@ class DeckBuilderApp(QMainWindow):
             synergie_pct = self.calculer_synergie(carte, self.combo_commandeur.currentText())
             self.tableau_cartes.setItem(i, 4, QTableWidgetItem(f"{synergie_pct}%"))
 
-            texte = carte.get("oracle_text", "")
-            self.tableau_cartes.setItem(
-                i, 5, QTableWidgetItem(texte[:100] + ("…" if len(texte) > 100 else ""))
-            )
+            # Choix du texte à afficher selon la checkbox de traduction
+            if getattr(self, 'checkbox_traduction', None) and self.checkbox_traduction.isChecked():
+                texte = carte.get("oracle_text_fr") or carte.get("oracle_text_en") or carte.get("oracle_text", "")
+            else:
+                texte = carte.get("oracle_text_en") or carte.get("oracle_text") or carte.get("oracle_text_fr", "")
+
+            # Tronquer pour l'affichage
+            court = texte[:100] + ("…" if len(texte) > 100 else "") if texte else ""
+            self.tableau_cartes.setItem(i, 5, QTableWidgetItem(court))
         self.tableau_cartes.resizeColumnsToContents()
 
     # ------------------------------------------------------------------
