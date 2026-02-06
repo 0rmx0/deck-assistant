@@ -65,6 +65,7 @@ jobs:
 
       - name: Build with PyInstaller (Linux/Windows)
         if: runner.os != 'macOS'
+        shell: bash
         run: |
           pyinstaller --name mtg-deck-builder \
             --onefile \
@@ -74,6 +75,7 @@ jobs:
 
       - name: Build with PyInstaller (macOS)
         if: runner.os == 'macOS'
+        shell: bash
         run: |
           pyinstaller --name mtg-deck-builder \
             --onefile \
