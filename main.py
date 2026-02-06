@@ -422,17 +422,18 @@ class ImportWorker(QThread):
 
     def run(self) -> None:
         try:
-            # Étape 1 : charger le CSV
+            # Étape 1 : charger le CSV (0-100%)
             collection = ChargeurCSV.charger(
                 self.chemin_fichier,
-                lambda pct: self.progression.emit(pct // 2)
+                lambda pct: self.progression.emit(pct)
             )
             
-            # Étape 2 : enrichir via Scryfall
+            # Étape 2 : enrichir via Scryfall (0-100%)
+            self.progression.emit(0)  # Reset à 0%
             total = len(collection)
             for idx, carte in enumerate(collection, start=1):
                 ClientScryfall.enrichir_carte(carte)
-                pct = 50 + int((idx / total) * 50)
+                pct = int((idx / total) * 100)
                 self.progression.emit(pct)
             
             self.fini.emit(collection)
