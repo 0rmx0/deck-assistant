@@ -14,7 +14,7 @@ setup(
     name="mtg-deck-builder",
     version="26.02.01",
     author="Remi",
-    description="MTG Deck Builder - Commandeur - A tool for building and analyzing Magic: The Gathering decks",
+    description="MTG Deck Builder - Commander - A tool for building and analyzing Magic: The Gathering decks",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/remi/mtg-deck-builder",
