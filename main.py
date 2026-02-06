@@ -3,7 +3,7 @@
 
 """
 MTG Deck Builder – Commander (Refactorisé)
-Version 26.02.01
+Version 1.0.0
 Version avec séparation des responsabilités et élimination de duplication.
 """
 
@@ -41,7 +41,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 
 # ========== CONSTANTES ==========
 
-VERSION = "26.02.01"
+VERSION = "1.0.0"
 
 COLOR_SYMBOLS = {
     "W": "⚪",  # Blanc

@@ -10,7 +10,7 @@ Ce projet est configuré pour **compiler automatiquement** des exécutables pour
 1. Allez sur votre dépôt GitHub
 2. Cliquez sur **"Releases"** dans la barre latérale droite
 3. Cliquez sur **"Create a new release"**
-4. Entrez un tag comme `v26.02.01` (doit commencer par `v`)
+4. Entrez un tag comme `v1.0.0` (doit commencer par `v`)
 5. Cliquez sur **"Publish release"**
 
 → Les exécutables seront **compilés automatiquement** et **attachés à la release**
@@ -74,5 +74,5 @@ Utilisez [Semantic Versioning](https://semver.org/) :
 - **v1.0.1** - Patch / bugfix
 - **v1.1.0** - Nouvelle feature mineure
 
-Taggez vos releases : `git tag -a v26.02.01 -m "Version 26.02.01"` puis `git push origin v26.02.01`
+Taggez vos releases : `git tag -a v1.0.0 -m "Version 1.0.0"` puis `git push origin v1.0.0`
 

@@ -12,7 +12,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="mtg-deck-builder",
-    version="26.02.01",
+    version="1.0.0",
     author="Remi",
     description="MTG Deck Builder - Commander - A tool for building and analyzing Magic: The Gathering decks",
     long_description=long_description,
