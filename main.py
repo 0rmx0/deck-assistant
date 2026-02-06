@@ -210,6 +210,27 @@ class GestionnaireBD:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM cartes")
             conn.commit()
+    
+    def get_existing_scryfall_ids(self) -> set:
+        """Récupère l'ensemble des scryfall_id existants dans la BD."""
+        ids = set()
+        with sqlite3.connect(self.chemin_bd) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT scryfall_id FROM cartes WHERE scryfall_id IS NOT NULL AND scryfall_id != ''")
+            for row in cursor.fetchall():
+                if row[0]:
+                    ids.add(row[0])
+        return ids
+    
+    def augmenter_quantite(self, scryfall_id: str, quantite: float) -> None:
+        """Augmente la quantité d'une carte existante."""
+        with sqlite3.connect(self.chemin_bd) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE cartes SET quantity = quantity + ? WHERE scryfall_id = ?",
+                (quantite, scryfall_id)
+            )
+            conn.commit()
 
 
 @dataclass
@@ -416,9 +437,10 @@ class ImportWorker(QThread):
     fini = Signal(list)
     erreur = Signal(str)
 
-    def __init__(self, chemin_fichier: str):
+    def __init__(self, chemin_fichier: str, gestionnaire_bd: 'GestionnaireBD' = None):
         super().__init__()
         self.chemin_fichier = chemin_fichier
+        self.gestionnaire_bd = gestionnaire_bd
 
     def run(self) -> None:
         try:
@@ -428,15 +450,37 @@ class ImportWorker(QThread):
                 lambda pct: self.progression.emit(pct)
             )
             
-            # Étape 2 : enrichir via Scryfall (0-100%)
+            # Charger les cartes existantes si une BD est présente
+            cartes_existantes = {}
+            nouvelles_cartes = []
+            
+            if self.gestionnaire_bd:
+                existing_ids = self.gestionnaire_bd.get_existing_scryfall_ids()
+                
+                # Séparer les nouvelles des existantes
+                for carte in collection:
+                    carte_id = carte.get("scryfall_id", "")
+                    if carte_id and carte_id in existing_ids:
+                        # Augmenter la quantité de la carte existante
+                        quantite = carte.get("quantity", 1.0)
+                        self.gestionnaire_bd.augmenter_quantite(carte_id, quantite)
+                    else:
+                        # Ajouter aux nouvelles cartes à enrichir
+                        nouvelles_cartes.append(carte)
+            else:
+                nouvelles_cartes = collection
+            
+            # Étape 2 : enrichir via Scryfall seulement les nouvelles cartes (0-100%)
             self.progression.emit(0)  # Reset à 0%
-            total = len(collection)
-            for idx, carte in enumerate(collection, start=1):
+            total = len(nouvelles_cartes) if nouvelles_cartes else 1
+            
+            for idx, carte in enumerate(nouvelles_cartes, start=1):
                 ClientScryfall.enrichir_carte(carte)
                 pct = int((idx / total) * 100)
                 self.progression.emit(pct)
             
-            self.fini.emit(collection)
+            # Émettre les nouvelles cartes (pas les existantes)
+            self.fini.emit(nouvelles_cartes)
         except Exception as exc:
             self.erreur.emit(str(exc))
 
@@ -480,6 +524,58 @@ class DeckBuilderApp(QMainWindow):
         
         action_quitter = menu_fichier.addAction("Quitter")
         action_quitter.triggered.connect(self.close)
+        
+        # Menu Édition
+        menu_edition = menubar.addMenu("Édition")
+        
+        action_selection_tout = menu_edition.addAction("Sélectionner tout")
+        action_selection_tout.triggered.connect(self.selectionner_tout)
+        
+        action_supprimer_selection = menu_edition.addAction("Supprimer la sélection")
+        action_supprimer_selection.triggered.connect(self.supprimer_selection)
+
+    def selectionner_tout(self) -> None:
+        """Sélectionne toutes les lignes du tableau."""
+        self.tableau_cartes.selectAll()
+
+    def supprimer_selection(self) -> None:
+        """Supprime les lignes sélectionnées du tableau et de la collection."""
+        lignes_selectionnees = set()
+        for index in self.tableau_cartes.selectedIndexes():
+            lignes_selectionnees.add(index.row())
+        
+        if not lignes_selectionnees:
+            QMessageBox.warning(self, "Aucune sélection", "Veuillez sélectionner des cartes à supprimer.")
+            return
+        
+        reponse = QMessageBox.question(
+            self,
+            "Confirmation",
+            f"Êtes-vous sûr de vouloir supprimer {len(lignes_selectionnees)} carte(s) ?"
+        )
+        
+        if reponse != QMessageBox.Yes:
+            return
+        
+        # Supprimer les lignes dans le tableau (de haut en bas pour éviter les décalages)
+        for ligne in sorted(lignes_selectionnees, reverse=True):
+            if ligne < len(self.collection):
+                # Supprimer de la collection et de la BD
+                carte_a_supprimer = self.collection[ligne]
+                if self.bd and carte_a_supprimer.get("scryfall_id"):
+                    # Supprimer de la BD
+                    with sqlite3.connect(self.bd.chemin_bd) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "DELETE FROM cartes WHERE scryfall_id = ?",
+                            (carte_a_supprimer["scryfall_id"],)
+                        )
+                        conn.commit()
+                
+                del self.collection[ligne]
+            self.tableau_cartes.removeRow(ligne)
+        
+        QMessageBox.information(self, "Succès", f"{len(lignes_selectionnees)} carte(s) supprimée(s).")
 
     def _creer_widgets(self) -> None:
         """Crée les widgets de l'interface."""
@@ -558,7 +654,7 @@ class DeckBuilderApp(QMainWindow):
         self.barre_progression.setVisible(True)
         self.bouton_importer.setEnabled(False)
 
-        self.worker = ImportWorker(fichier)
+        self.worker = ImportWorker(fichier, self.bd)
         self.worker.progression.connect(self.barre_progression.setValue)
         self.worker.fini.connect(self._import_termine)
         self.worker.erreur.connect(self._import_erreur)
@@ -566,13 +662,14 @@ class DeckBuilderApp(QMainWindow):
 
     def _import_termine(self, collection: List[Dict[str, Any]]) -> None:
         """Callback quand l'import est fini."""
-        self.collection = collection
         self.barre_progression.setVisible(False)
         self.bouton_importer.setEnabled(True)
 
-        if not self.collection:
-            QMessageBox.warning(self, "Erreur", "Le CSV est vide ou mal formaté.")
+        if not collection:
+            QMessageBox.information(self, "Juste les doublons", "Toutes les cartes du CSV étaient déjà présentes dans la base de données. Les quantités ont été mises à jour.")
             return
+        
+        self.collection.extend(collection)  # Ajouter les nouvelles cartes à la collection existante
         
         # Proposer de créer/utiliser une BD
         if not self.bd:
@@ -582,21 +679,23 @@ class DeckBuilderApp(QMainWindow):
                 "Voulez-vous créer une base de données pour sauvegarder cette collection ?"
             )
             if reponse == QMessageBox.Yes:
-                fichier, _ = QFileDialog.getSaveFileName(
+                fichier_bd, _ = QFileDialog.getSaveFileName(
                     self, "Créer une base de données", "", "Fichiers SQLite (*.db)"
                 )
-                if fichier:
+                if fichier_bd:
                     # S'assurer que le fichier se termine par .db
-                    if not fichier.lower().endswith('.db'):
-                        fichier = fichier + '.db'
-                    self.bd = GestionnaireBD(fichier)
-                    self.chemin_bd_actuel = fichier
-                    self.setWindowTitle(f"MTG Deck Builder - Commandeur v{VERSION} - {Path(fichier).name}")
+                    if not fichier_bd.lower().endswith('.db'):
+                        fichier_bd = fichier_bd + '.db'
+                    self.bd = GestionnaireBD(fichier_bd)
+                    self.chemin_bd_actuel = fichier_bd
+                    self.setWindowTitle(f"MTG Deck Builder - Commandeur v{VERSION} - {Path(fichier_bd).name}")
         
-        # Sauvegarder dans la BD
+        # Sauvegarder les nouvelles cartes dans la BD
         if self.bd:
-            self.bd.sauvegarder_cartes(self.collection)
-            QMessageBox.information(self, "Succès", f"Collection sauvegardée : {len(self.collection)} cartes")
+            self.bd.sauvegarder_cartes(collection)
+            QMessageBox.information(self, "Succès", f"Collection mise à jour : {len(collection)} nouvelles cartes importées")
+        else:
+            QMessageBox.information(self, "Succès", f"{len(collection)} nouvelles cartes importées (pas encore sauvegardées en BD)")
         
         self.mettre_a_jour_liste_commandeurs()
         self.mettre_a_jour_tableau(self.combo_commandeur.currentText())
