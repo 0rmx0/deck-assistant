@@ -1,4 +1,4 @@
-# MTG Deck Builder – Commandeur
+# MTG Deck Builder – Commander
 
 Un outil pour construire et analyser des decks **Magic: The Gathering** avec une interface graphique intuitive.
 

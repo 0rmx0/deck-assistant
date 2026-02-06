@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-MTG Deck Builder – Commandeur (Refactorisé)
+MTG Deck Builder – Commander (Refactorisé)
 Version 26.02.01
 Version avec séparation des responsabilités et élimination de duplication.
 """
@@ -370,7 +370,7 @@ class CalculatriceSynergie:
     STAR_SYMBOL = "⭐"  # Symbole d'étoile
     
     @staticmethod
-    def calculer(carte: Dict[str, Any], commandeur: Dict[str, Any]) -> int:
+    def calculer(carte: Dict[str, Any], commander: Dict[str, Any]) -> int:
         """Retourne un score de synergie en nombre d'étoiles (0-5)."""
         score = 0
         
@@ -384,8 +384,8 @@ class CalculatriceSynergie:
         
         # Bonus couleurs compatibles
         couleurs_carte = set(carte.get("couleur", []))
-        couleurs_commandeur = set(commandeur.get("couleur", []))
-        if couleurs_carte.issubset(couleurs_commandeur):
+        couleurs_commander = set(commander.get("couleur", []))
+        if couleurs_carte.issubset(couleurs_commander):
             score += 2
         
         # Convertir en nombre d'étoiles (0-5)
@@ -490,7 +490,7 @@ class ImportWorker(QThread):
 class DeckBuilderApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"MTG Deck Builder - Commandeur v{VERSION}")
+        self.setWindowTitle(f"MTG Deck Builder - Commander v{VERSION}")
         self.setGeometry(100, 100, 950, 650)
 
         # Gestionnaire de BD
@@ -579,9 +579,9 @@ class DeckBuilderApp(QMainWindow):
 
     def _creer_widgets(self) -> None:
         """Crée les widgets de l'interface."""
-        self.label_commandeur = QLabel("Sélectionnez un commandant :")
-        self.combo_commandeur = QComboBox()
-        self.combo_commandeur.currentTextChanged.connect(self.mettre_a_jour_tableau)
+        self.label_commander = QLabel("Sélectionnez un commandant :")
+        self.combo_commander = QComboBox()
+        self.combo_commander.currentTextChanged.connect(self.mettre_a_jour_tableau)
 
         self.bouton_importer = QPushButton("Importer une collection (CSV)")
         self.bouton_importer.clicked.connect(self.importer_collection)
@@ -622,9 +622,9 @@ class DeckBuilderApp(QMainWindow):
                 QMessageBox.warning(self, "Avertissement", "La base de données est vide.")
                 return
             
-            self.setWindowTitle(f"MTG Deck Builder - Commandeur v{VERSION} - {Path(fichier).name}")
-            self.mettre_a_jour_liste_commandeurs()
-            self.mettre_a_jour_tableau(self.combo_commandeur.currentText())
+            self.setWindowTitle(f"MTG Deck Builder - commander v{VERSION} - {Path(fichier).name}")
+            self.mettre_a_jour_liste_commanders()
+            self.mettre_a_jour_tableau(self.combo_commander.currentText())
             QMessageBox.information(self, "Succès", f"Base de données chargée : {len(self.collection)} cartes")
         except Exception as e:
             QMessageBox.critical(self, "Erreur", f"Impossible d'ouvrir la base : {e}")
@@ -632,8 +632,8 @@ class DeckBuilderApp(QMainWindow):
     def _creer_layout(self) -> None:
         """Crée le layout principal."""
         layout = QVBoxLayout()
-        layout.addWidget(self.label_commandeur)
-        layout.addWidget(self.combo_commandeur)
+        layout.addWidget(self.label_commander)
+        layout.addWidget(self.combo_commander)
         layout.addWidget(self.bouton_importer)
         layout.addWidget(self.barre_progression)
         layout.addWidget(self.tableau_cartes)
@@ -688,7 +688,7 @@ class DeckBuilderApp(QMainWindow):
                         fichier_bd = fichier_bd + '.db'
                     self.bd = GestionnaireBD(fichier_bd)
                     self.chemin_bd_actuel = fichier_bd
-                    self.setWindowTitle(f"MTG Deck Builder - Commandeur v{VERSION} - {Path(fichier_bd).name}")
+                    self.setWindowTitle(f"MTG Deck Builder - commander v{VERSION} - {Path(fichier_bd).name}")
         
         # Sauvegarder les nouvelles cartes dans la BD
         if self.bd:
@@ -697,8 +697,8 @@ class DeckBuilderApp(QMainWindow):
         else:
             QMessageBox.information(self, "Succès", f"{len(collection)} nouvelles cartes importées (pas encore sauvegardées en BD)")
         
-        self.mettre_a_jour_liste_commandeurs()
-        self.mettre_a_jour_tableau(self.combo_commandeur.currentText())
+        self.mettre_a_jour_liste_commanders()
+        self.mettre_a_jour_tableau(self.combo_commander.currentText())
 
     def _import_erreur(self, message: str) -> None:
         """Callback en cas d'erreur."""
@@ -706,26 +706,26 @@ class DeckBuilderApp(QMainWindow):
         self.bouton_importer.setEnabled(True)
         QMessageBox.critical(self, "Erreur d'import", f"Erreur : {message}")
 
-    def mettre_a_jour_liste_commandeurs(self) -> None:
+    def mettre_a_jour_liste_commanders(self) -> None:
         """Met à jour la liste des commandants légendaires."""
-        self.combo_commandeur.clear()
+        self.combo_commander.clear()
         self._combo_to_nom.clear()
 
-        commandeurs = [
+        commanders = [
             carte for carte in self.collection
             if "Legendary" in carte.get("type", "")
         ]
 
-        if not commandeurs:
+        if not commanders:
             QMessageBox.warning(self, "Avertissement", "Aucun commandant trouvé.")
             return
 
-        for carte in commandeurs:
+        for carte in commanders:
             nom = carte["nom"]
             couleurs = carte.get("couleur", [])
             symboles = GestionnairesCouleurs.couleurs_a_symboles(couleurs)
             texte = f"{nom} [{symboles}]"
-            self.combo_commandeur.addItem(texte)
+            self.combo_commander.addItem(texte)
             self._combo_to_nom[texte] = nom
 
     def mettre_a_jour_tableau(self, texte_combo: str) -> None:
@@ -733,20 +733,20 @@ class DeckBuilderApp(QMainWindow):
         if not self.collection or not texte_combo:
             return
 
-        nom_commandeur = self._combo_to_nom.get(texte_combo, texte_combo)
-        commandeur = next(
-            (c for c in self.collection if c["nom"] == nom_commandeur),
+        nom_commander = self._combo_to_nom.get(texte_combo, texte_combo)
+        commander = next(
+            (c for c in self.collection if c["nom"] == nom_commander),
             None
         )
 
-        if not commandeur:
+        if not commander:
             return
 
-        couleurs = commandeur.get("couleur", [])
+        couleurs = commander.get("couleur", [])
         cartes = GestionnairesCouleurs.filtrer_par_couleurs(self.collection, couleurs)
-        self.remplir_tableau(cartes, commandeur)
+        self.remplir_tableau(cartes, commander)
 
-    def remplir_tableau(self, cartes: List[Dict[str, Any]], commandeur: Dict[str, Any]) -> None:
+    def remplir_tableau(self, cartes: List[Dict[str, Any]], commander: Dict[str, Any]) -> None:
         """Affiche les cartes dans le tableau."""
         self.tableau_cartes.setRowCount(len(cartes))
         
@@ -765,7 +765,7 @@ class DeckBuilderApp(QMainWindow):
             self.tableau_cartes.setItem(i, 3, QTableWidgetItem(carte.get("cout_mana", "")))
             
             # Colonne : Synergie
-            synergie_etoiles = CalculatriceSynergie.calculer(carte, commandeur)
+            synergie_etoiles = CalculatriceSynergie.calculer(carte, commander)
             affichage = CalculatriceSynergie.afficher_synergie(synergie_etoiles)
             self.tableau_cartes.setItem(i, 4, QTableWidgetItem(affichage))
             
