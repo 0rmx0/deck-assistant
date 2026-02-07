@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QVBoxLayout,
+    QHBoxLayout,
     QWidget,
     QComboBox,
     QTableWidget,
@@ -586,6 +587,9 @@ class DeckBuilderApp(QMainWindow):
         self.bouton_importer = QPushButton("Importer une collection (CSV)")
         self.bouton_importer.clicked.connect(self.importer_collection)
 
+        self.bouton_ouvrir_bd = QPushButton("Ouvrir une base de données")
+        self.bouton_ouvrir_bd.clicked.connect(self.ouvrir_base_donnees)
+
         self.tableau_cartes = QTableWidget()
         self.tableau_cartes.setColumnCount(6)
         self.tableau_cartes.setHorizontalHeaderLabels(
@@ -634,7 +638,13 @@ class DeckBuilderApp(QMainWindow):
         layout = QVBoxLayout()
         layout.addWidget(self.label_commander)
         layout.addWidget(self.combo_commander)
-        layout.addWidget(self.bouton_importer)
+        
+        # Layout horizontal pour les boutons
+        layout_boutons = QHBoxLayout()
+        layout_boutons.addWidget(self.bouton_importer)
+        layout_boutons.addWidget(self.bouton_ouvrir_bd)
+        layout.addLayout(layout_boutons)
+        
         layout.addWidget(self.barre_progression)
         layout.addWidget(self.tableau_cartes)
 
